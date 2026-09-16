@@ -1,0 +1,35 @@
+# AI and agent-only context/design material
+CONTEXT.md
+doc/AGENT.md
+docs/adr/
+.agents/
+.codex/
+
+# Generated deployment files and rollback state
+config/binds.lua
+config/.binds.lua.previous
+config/.binds.lua.previous.missing
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Editor, OS, and temporary files
+.DS_Store
+*.swp
+*.swo
+*~
+*.tmp
+
+# Build and coverage output
+build/
+dist/
+.coverage
+coverage.xml
+htmlcov/

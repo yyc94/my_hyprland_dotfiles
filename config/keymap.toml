@@ -1,0 +1,96 @@
+# TOML is the only hand-maintained source for the keybinding scheme.
+#
+# A value is one chord string or an array of chord strings. A chord has at most
+# one modifier and one ordinary key. The compiler reports every schema error at
+# its TOML field path and never fills in omitted bindings from hidden defaults.
+
+[meta]
+schema = "1"
+target_hyprland = ">=0.55.0"
+profile = "CachyOS Hypr/Noctalia"
+
+[modifiers]
+# These aliases keep the mapping readable and make modifier changes one-place edits.
+mod = "SUPER"
+send = "ALT"
+
+[window]
+# Neovim-inspired directional focus, with one-step window controls.
+focus = ["mod+h", "mod+j", "mod+k", "mod+l"]
+close = "mod+q"
+fullscreen = "mod+f"
+maximize = "mod+d"
+toggle_float = "mod+t"
+split_direction = "mod+g"
+cycle_window = "send+Tab"
+
+[workspace]
+# Number-row bindings compile to physical code:10..19 for layout stability.
+switch = ["mod+1", "mod+2", "mod+3", "mod+4", "mod+5", "mod+6", "mod+7", "mod+8", "mod+9", "mod+0"]
+move_follow = ["send+1", "send+2", "send+3", "send+4", "send+5", "send+6", "send+7", "send+8", "send+9", "send+0"]
+adjacent_focus = ["mod+leftbracket", "mod+rightbracket"]
+adjacent_move = ["send+leftbracket", "send+rightbracket"]
+scratchpad_toggle = "mod+s"
+scratchpad_move = "send+s"
+
+[monitor]
+# Workspaces stay global and are not assigned to a fixed monitor.
+focus_next = "mod+o"
+move_next_follow = "send+o"
+
+[application]
+# Commands are resolved by config/variables.lua, not copied into generated Lua.
+terminal = "mod+Enter"
+file_manager = "mod+e"
+browser = "mod+b"
+calculator = "mod+c"
+system_monitor = "mod+u"
+
+[noctalia]
+# Noctalia IPC keeps these surfaces in one Desktop UI shell.
+launcher = "mod+Space"
+window_switcher = "mod+Tab"
+clipboard = "mod+v"
+notifications = "mod+n"
+control_center = "mod+x"
+settings = "mod+comma"
+emoji = "mod+period"
+wallpaper = "mod+w"
+# Lock and session controls are universal so recovery remains possible in Adjust mode.
+lock = "mod+Backspace"
+session_menu = "mod+Escape"
+
+[hardware]
+# XF86 keys are universal bindings and use Noctalia IPC for shell integration.
+volume_up = "XF86AudioRaiseVolume"
+volume_down = "XF86AudioLowerVolume"
+mute = "XF86AudioMute"
+play_pause = "XF86AudioPlay"
+previous = "XF86AudioPrev"
+next = "XF86AudioNext"
+brightness_down = "XF86MonBrightnessDown"
+brightness_up = "XF86MonBrightnessUp"
+
+[utility]
+screenshot_region = "Print"
+screenshot_fullscreen = "Shift+Print"
+color_picker = "mod+p"
+zoom_out = "mod+minus"
+zoom_in = "mod+equal"
+
+[pointer]
+move = "mod+mouse:left"
+resize = "mod+mouse:right"
+
+[adjust]
+# Adjust is a finite mode: mod+a enters it, Esc/Enter leave it, and unknown
+# keys are consumed by the generated catchall while the mode remains active.
+enter = "mod+a"
+exit = ["Esc", "Enter"]
+reorder = ["h", "j", "k", "l"]
+resize = ["Shift+h", "Shift+j", "Shift+k", "Shift+l"]
+
+# Add commands here only when their process is in the compiler allowlist. Each
+# entry must be { chord = "...", command = "...", mode = "normal|universal" }.
+# Raw Lua and arbitrary hyprctl dispatchers are rejected.
+[extra.exec]
