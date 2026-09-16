@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Compile and safely apply the TOML-driven Hyprland keymap."""
+"""Validate and render the TOML-driven Hyprland keymap domain."""
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
-import os
+import re
 import shlex
-import shutil
-import subprocess
-import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from string import ascii_uppercase
@@ -20,9 +15,6 @@ from typing import Any, Iterable
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYMAP_PATH = ROOT / "config" / "keymap.toml"
-DOC_PATH = ROOT / "doc" / "KEYMAP.md"
-LUA_RELATIVE_PATH = Path("config") / "binds.lua"
-CONFIG_ROOT_ENV = "HYPRLAND_CONFIG_ROOT"
 
 SECTION_ORDER = (
     "window",
@@ -355,7 +347,7 @@ def _validate_command(command: object, path: str, errors: list[str]) -> None:
             expects_executable = True
             continue
         if expects_executable:
-            if word.split("/")[-1] not in ALLOWED_EXECUTABLES:
+            if word not in ALLOWED_EXECUTABLES:
                 errors.append(f"{path}: executable is not in the controlled process allowlist")
                 break
             expects_executable = False
@@ -456,6 +448,8 @@ def validate(data: object, source: Path = KEYMAP_PATH) -> Keymap:
                 continue
             action_chords = _chords(value, f"{section}.{action}", modifiers, errors)
             for chord in action_chords:
+                if section == "window" and action == "focus" and chord.key not in {"H", "J", "K", "L"}:
+                    errors.append(f"{section}.{action}: keys must be h, j, k, or l so their directions are unambiguous")
                 bindings.append(
                     Binding(
                         section,
@@ -484,8 +478,8 @@ def validate(data: object, source: Path = KEYMAP_PATH) -> Keymap:
                     assert isinstance(exec_table, dict)
                     for name, entry in exec_table.items():
                         path = f"extra.exec.{name}"
-                        if not isinstance(name, str) or not name:
-                            errors.append(f"{path}: command name must be non-empty")
+                        if not isinstance(name, str) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name) is None:
+                            errors.append(f"{path}: command name must be a non-empty identifier")
                             continue
                         if not _is_table(entry):
                             errors.append(f"{path}: expected a table")
@@ -576,7 +570,7 @@ def load_keymap(path: Path = KEYMAP_PATH) -> Keymap:
         raise KeymapError(("Python 3.11+ is required because the compiler uses the standard-library tomllib",)) from exc
     except FileNotFoundError as exc:
         raise KeymapError((f"{path}: file does not exist",)) from exc
-    except (OSError, tomllib.TOMLDecodeError) as exc:
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise KeymapError((f"{path}: invalid TOML ({exc})",)) from exc
     return validate(data, path)
 
@@ -638,7 +632,7 @@ def _dispatcher(binding: Binding) -> str:
     section, action, key = binding.section, binding.action, binding.chord.key
     if section == "window":
         if action == "focus":
-            direction = {"H": "l", "J": "d", "K": "u", "L": "r"}[key]
+            direction = {"H": "left", "J": "down", "K": "up", "L": "right"}[key]
             return f'hl.dsp.focus({{ direction = "{direction}" }})'
         if action == "maximize":
             # The scrolling layout has no core maximize dispatcher. This is the
@@ -662,21 +656,21 @@ def _dispatcher(binding: Binding) -> str:
             workspace = _workspace_value(binding)
             if action == "switch":
                 return f'hl.dsp.focus({{ workspace = "{workspace}" }})'
-            return f'function()\n\thl.dispatch(hl.dsp.window.move({{ workspace = "{workspace}" }}))\n\thl.dispatch(hl.dsp.focus({{ workspace = "{workspace}" }}))\nend'
+            return f'hl.dsp.window.move({{ workspace = "{workspace}", follow = true }})'
         if action == "adjacent_focus":
             return f'hl.dsp.focus({{ workspace = "{"e-1" if key == "[" else "e+1"}" }})'
         if action == "adjacent_move":
             direction = "e-1" if key == "[" else "e+1"
-            return f'function()\n\thl.dispatch(hl.dsp.window.move({{ workspace = "{direction}" }}))\n\thl.dispatch(hl.dsp.focus({{ workspace = "{direction}" }}))\nend'
+            return f'hl.dsp.window.move({{ workspace = "{direction}", follow = true }})'
         if action == "scratchpad_toggle":
             return 'hl.dsp.workspace.toggle_special("scratchpad")'
         return 'hl.dsp.window.move({ workspace = "special:scratchpad" })'
     if section == "monitor":
         if action == "focus_next":
             return 'hl.dsp.focus({ monitor = "+1" })'
-        return 'function()\n\thl.dispatch(hl.dsp.window.move({ monitor = "+1" }))\n\thl.dispatch(hl.dsp.focus({ monitor = "+1" }))\nend'
+        return 'hl.dsp.window.move({ monitor = "+1", follow = true })'
     if section == "application":
-        return f"hl.dsp.exec_cmd(variables.{action})"
+        return f"hl.dsp.exec_cmd(variables.commands.{action})"
     if section == "noctalia":
         return f"hl.dsp.exec_cmd({_lua_string(_noctalia_command(action))})"
     if section == "hardware":
@@ -708,7 +702,7 @@ def _dispatcher(binding: Binding) -> str:
         if action == "exit":
             return 'hl.dsp.submap("reset")'
         if action == "reorder":
-            direction = {"H": "l", "J": "d", "K": "u", "L": "r"}[key]
+            direction = {"H": "left", "J": "down", "K": "up", "L": "right"}[key]
             return f'hl.dsp.window.swap({{ direction = "{direction}" }})'
         deltas = {"H": ("-40", "0"), "J": ("0", "40"), "K": ("0", "-40"), "L": ("40", "0")}
         x, y = deltas[key]
@@ -723,8 +717,6 @@ def _render_binding(binding: Binding) -> str:
     if binding.mode == "adjust":
         return _render_submap_binding(binding, expression)
     options: list[str] = []
-    if binding.section == "pointer":
-        options.append("mouse = true")
     if binding.section == "hardware":
         options.append("locked = true")
         if binding.action in {"volume_up", "volume_down", "brightness_down", "brightness_up"}:
@@ -754,11 +746,9 @@ def render_lua(keymap: Keymap) -> str:
         f"-- Content-SHA256: {keymap.source_hash}",
         "-- Target: Hyprland >= 0.55.0, CachyOS Hypr/Noctalia profile",
         "",
-        'local variables = require("config.variables")',
+        'local variables = require("config.generated.variables")',
         "",
-        "-- Keep configuration changes explicit; reload is performed by just apply.",
-        "hl.config({ misc = { disable_autoreload = true } })",
-        "",
+        "-- Configuration reload is controlled by the generated aggregate module.",
     ]
     current_section: str | None = None
     adjust_open = False
@@ -780,7 +770,6 @@ def render_lua(keymap: Keymap) -> str:
     if keymap.extra_exec:
         lines.extend(["-- extra.exec", ""])
         for item in keymap.extra_exec:
-            lines.append(f"-- {item.name}: {item.command}")
             lines.append(_render_extra_exec(item))
             lines.append("")
     lines.extend(["-- Adjust mode consumes otherwise-unbound keys and stays active until Esc or Enter.", ""])
@@ -802,7 +791,7 @@ def render_doc(keymap: Keymap) -> str:
         "This file is generated from [`config/keymap.toml`](../config/keymap.toml). "
         "The keymap targets Hyprland >= 0.55.0 with the CachyOS Hypr/Noctalia profile.",
         "",
-        "The generated Lua is deployed to `$HYPRLAND_CONFIG_ROOT/config/binds.lua`. "
+        "The generated Lua is deployed to `$HYPRLAND_CONFIG_ROOT/config/generated/binds.lua`. "
         "Set `HYPRLAND_CONFIG_ROOT` once in the workstation environment, then use the "
         "Justfile commands to generate, check, apply, or roll back the deployment.",
         "",
@@ -918,105 +907,6 @@ def render_doc(keymap: Keymap) -> str:
     return "\n".join(lines)
 
 
-def _atomic_write(path: Path, content: str | bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    old_mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
-    old_mode |= 0o200
-    payload = content.encode("utf-8") if isinstance(content, str) else content
-    with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", delete=False) as handle:
-        temporary = Path(handle.name)
-        handle.write(payload)
-    try:
-        os.chmod(temporary, old_mode or 0o644)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _target_root() -> Path:
-    value = os.environ.get(CONFIG_ROOT_ENV)
-    if not value or not value.strip():
-        raise KeymapError(
-            (
-                f"{CONFIG_ROOT_ENV} is not set; define it once, for example "
-                '`export HYPRLAND_CONFIG_ROOT="$HOME/.config/hypr"`',
-            )
-        )
-    return Path(value).expanduser().resolve()
-
-
-def _target_lua_path(target_root: Path) -> Path:
-    return target_root / LUA_RELATIVE_PATH
-
-
-def _display_path(path: Path) -> str:
-    try:
-        return str(path.relative_to(ROOT))
-    except ValueError:
-        return str(path)
-
-
-def generate(
-    path: Path = KEYMAP_PATH,
-    *,
-    check: bool = False,
-) -> list[str]:
-    target_root = _target_root()
-    if not check and target_root == ROOT:
-        raise KeymapError(
-            (
-                "repository is the live Hyprland config root; use `just apply` for a controlled reload",
-            )
-        )
-    keymap = load_keymap(path)
-    outputs = {_target_lua_path(target_root): render_lua(keymap), DOC_PATH: render_doc(keymap)}
-    mismatches: list[str] = []
-    for output_path, content in outputs.items():
-        if check:
-            if not output_path.exists() or output_path.read_text(encoding="utf-8") != content:
-                mismatches.append(_display_path(output_path))
-        else:
-            _atomic_write(output_path, content)
-    return mismatches
-
-
-def _lua_binary() -> str | None:
-    # Do not silently use an unrelated system Lua (for example Lua 5.1).
-    return os.environ.get("LUA") or shutil.which("lua5.5")
-
-
-def _lua_syntax_check(path: Path) -> None:
-    lua = _lua_binary()
-    if lua is None:
-        print(f"warning: no external Lua interpreter; skipped syntax check for {path}", file=sys.stderr)
-        return
-    lua_check = f"assert(loadfile({_lua_string(str(path))}))"
-    try:
-        result = subprocess.run([lua, "-e", lua_check], capture_output=True, text=True)
-    except OSError as exc:
-        raise KeymapError((f"Lua syntax checker could not be executed: {exc}",)) from exc
-    if result.returncode:
-        raise KeymapError((f"{path}: Lua syntax check failed: {result.stderr.strip()}",))
-
-
-def check(path: Path = KEYMAP_PATH) -> None:
-    target_root = _target_root()
-    mismatches = generate(path, check=True)
-    if mismatches:
-        raise KeymapError(
-            ("generated files are out of date: " + ", ".join(mismatches) + "; run `just generate`",)
-        )
-    for lua_path in (_target_lua_path(target_root), ROOT / "config" / "variables.lua", ROOT / "hyprland.lua"):
-        _lua_syntax_check(lua_path)
-    entrypoint = ROOT / "hyprland.lua"
-    if not entrypoint.exists():
-        raise KeymapError(("hyprland.lua: native Lua entrypoint is missing",))
-    entrypoint_text = entrypoint.read_text(encoding="utf-8")
-    for required in ('require("config.variables")', 'require("config.binds")'):
-        if required not in entrypoint_text:
-            raise KeymapError((f"hyprland.lua: expected {required}",))
-
-
 def list_keymap(path: Path = KEYMAP_PATH) -> str:
     keymap = load_keymap(path)
     lines = ["Supported actions:"]
@@ -1030,168 +920,3 @@ def list_keymap(path: Path = KEYMAP_PATH) -> str:
         lines.append(f"  {item.mode:9} {item.chord.canonical:28} extra.exec.{item.name}")
     lines.append("\nF1-F12 are legal spare keys and currently unbound.")
     return "\n".join(lines)
-
-
-def _hyprctl_command() -> str:
-    return os.environ.get("HYPRCTL", "hyprctl")
-
-
-def _run_hyprctl(*arguments: str) -> subprocess.CompletedProcess[str]:
-    command = _hyprctl_command()
-    try:
-        return subprocess.run([command, *arguments], capture_output=True, text=True)
-    except OSError as exc:
-        return subprocess.CompletedProcess([command, *arguments], 127, "", str(exc))
-
-
-def _config_errors() -> list[Any]:
-    result = _run_hyprctl("-j", "configerrors")
-    if result.returncode:
-        raise KeymapError((f"hyprctl -j configerrors failed: {result.stderr.strip() or result.stdout.strip()}",))
-    try:
-        payload = json.loads(result.stdout or "[]")
-    except json.JSONDecodeError as exc:
-        raise KeymapError((f"hyprctl -j configerrors returned invalid JSON: {exc}",)) from exc
-    if isinstance(payload, list):
-        return payload
-    if isinstance(payload, dict):
-        errors = payload.get("errors", [])
-        return errors if isinstance(errors, list) else [errors]
-    return [payload]
-
-
-def _reload() -> tuple[bool, str]:
-    result = _run_hyprctl("reload")
-    if result.returncode:
-        return False, result.stderr.strip() or result.stdout.strip() or "hyprctl reload failed"
-    try:
-        errors = _config_errors()
-    except KeymapError as exc:
-        return False, str(exc)
-    if errors:
-        return False, json.dumps(errors, ensure_ascii=True)
-    return True, ""
-
-
-def _syntax_check_file(path: Path) -> None:
-    try:
-        _lua_syntax_check(path)
-    except KeymapError as exc:
-        raise KeymapError((str(exc).removeprefix("- ").replace("Lua syntax check failed", "candidate Lua syntax check failed"),)) from exc
-
-
-def _history_paths(target_root: Path) -> tuple[Path, Path]:
-    directory = target_root / "config"
-    return directory / ".binds.lua.previous", directory / ".binds.lua.previous.missing"
-
-
-def _save_history(bind_path: Path, history: Path, missing: Path) -> None:
-    history.unlink(missing_ok=True)
-    missing.unlink(missing_ok=True)
-    if bind_path.exists():
-        _atomic_write(history, bind_path.read_bytes())
-    else:
-        _atomic_write(missing, b"missing\n")
-
-
-def _restore_history(bind_path: Path, history: Path, missing: Path) -> None:
-    if history.exists():
-        _atomic_write(bind_path, history.read_bytes())
-    elif missing.exists():
-        bind_path.unlink(missing_ok=True)
-    else:
-        raise KeymapError(("no applied keymap rollback history exists",))
-
-
-def apply(path: Path = KEYMAP_PATH) -> None:
-    target_root = _target_root()
-    keymap = load_keymap(path)
-    candidate = render_lua(keymap)
-    with tempfile.NamedTemporaryFile(prefix="keymap-candidate-", suffix=".lua", delete=False) as handle:
-        candidate_path = Path(handle.name)
-        handle.write(candidate.encode("utf-8"))
-    try:
-        _syntax_check_file(candidate_path)
-        baseline = _config_errors()
-        if baseline:
-            raise KeymapError(("existing Hyprland configuration errors:\n" + "\n".join(map(str, baseline)),))
-        target_bind = _target_lua_path(target_root)
-        history, missing = _history_paths(target_root)
-        watcher = _run_hyprctl("keyword", "misc:disable_autoreload", "true")
-        if watcher.returncode:
-            raise KeymapError(f"could not disable Hyprland autoreload: {watcher.stderr.strip()}")
-        _save_history(target_bind, history, missing)
-        _atomic_write(target_bind, candidate)
-        success, detail = _reload()
-        if not success:
-            try:
-                _restore_history(target_bind, history, missing)
-                rollback_ok, rollback_detail = _reload()
-            except KeymapError as exc:
-                rollback_ok, rollback_detail = False, str(exc)
-            raise KeymapError(
-                (
-                    f"new keymap failed after reload: {detail}",
-                    f"automatic rollback {'succeeded' if rollback_ok else 'failed'}: {rollback_detail or 'old keymap restored'}",
-                )
-            )
-        print(f"Applied {path} to {target_bind}; Hyprland reload completed without config errors.")
-    finally:
-        candidate_path.unlink(missing_ok=True)
-
-
-def rollback() -> None:
-    target_root = _target_root()
-    target_bind = _target_lua_path(target_root)
-    history, missing = _history_paths(target_root)
-    current = target_bind.read_bytes() if target_bind.exists() else None
-    watcher = _run_hyprctl("keyword", "misc:disable_autoreload", "true")
-    if watcher.returncode:
-        raise KeymapError((f"could not disable Hyprland autoreload: {watcher.stderr.strip()}",))
-    try:
-        _restore_history(target_bind, history, missing)
-        success, detail = _reload()
-        if not success:
-            if current is None:
-                target_bind.unlink(missing_ok=True)
-            else:
-                _atomic_write(target_bind, current)
-            _reload()
-            raise KeymapError((f"rollback reload failed: {detail}; current keymap was restored",))
-        history.unlink(missing_ok=True)
-        missing.unlink(missing_ok=True)
-        print(f"Rolled back {target_bind}; keymap.toml was left unchanged.")
-    except Exception:
-        raise
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("generate", "check", "list", "test", "apply", "rollback"))
-    args = parser.parse_args(argv)
-    try:
-        if args.command == "generate":
-            target_root = _target_root()
-            mismatches = generate()
-            assert not mismatches
-            print(f"Generated {_target_lua_path(target_root)} and {DOC_PATH}.")
-        elif args.command == "check":
-            check()
-            print("Keymap, generated files, entrypoint, and Lua syntax are synchronized.")
-        elif args.command == "list":
-            print(list_keymap())
-        elif args.command == "test":
-            result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"])
-            return result.returncode
-        elif args.command == "apply":
-            apply()
-        elif args.command == "rollback":
-            rollback()
-    except KeymapError as exc:
-        print(f"keymap: {exc}", file=sys.stderr)
-        return 1
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

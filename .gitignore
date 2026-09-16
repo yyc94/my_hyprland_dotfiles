@@ -6,9 +6,9 @@ docs/adr/
 .codex/
 
 # Generated deployment files and rollback state
-config/binds.lua
-config/.binds.lua.previous
-config/.binds.lua.previous.missing
+config/generated/
+config/.generated-manifest.json
+config/.generated-history.json
 
 # Python caches and local environments
 __pycache__/

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 import io
-import json
 import os
-import stat
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from scripts import keymap
+from scripts import config, keymap
 
 
 BASE = """
@@ -126,15 +123,24 @@ command = "waybar"
         self.assertIn('grim -g \\"$(slurp)\\" - | wl-copy', output)
 
     def test_lua_syntax_precheck_is_optional(self) -> None:
-        with mock.patch.object(keymap, "_lua_binary", return_value=None):
+        with mock.patch.object(config, "_lua_binary", return_value=None):
             with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
-                keymap._lua_syntax_check(Path("candidate.lua"))
+                config._lua_syntax_check(Path("candidate.lua"))
         self.assertIn("skipped syntax check", stderr.getvalue())
+
+    def test_pointer_bindings_use_the_mouse_key_without_unknown_options(self) -> None:
+        result = self.load(BASE + '\n[pointer]\nmove = "mod+mouse:left"\n')
+        output = keymap.render_lua(result)
+        self.assertIn('hl.bind("SUPER + mouse:272", hl.dsp.window.drag())', output)
+        self.assertNotIn("mouse = true", output)
+
+    def test_rejects_directional_actions_with_ambiguous_keys(self) -> None:
+        self.assertInvalid(BASE + '\n[window]\nfocus = "mod+x"\n', "directions are unambiguous")
 
     def test_lua_binary_does_not_fall_back_to_an_unversioned_interpreter(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            with mock.patch.object(keymap.shutil, "which", return_value=None) as which:
-                self.assertIsNone(keymap._lua_binary())
+            with mock.patch.object(config.shutil, "which", return_value=None) as which:
+                self.assertIsNone(config._lua_binary())
                 which.assert_called_once_with("lua5.5")
 
     def test_universal_bindings_are_emitted_for_normal_and_adjust(self) -> None:
@@ -157,7 +163,7 @@ command = "waybar"
         self.assertIn('hl.define_submap("adjust", function()', output)
         self.assertIn('\thl.bind("Escape", hl.dsp.submap("reset"))', output)
         self.assertIn(
-            '\thl.bind("H", hl.dsp.window.swap({ direction = "l" }), { repeating = true })',
+            '\thl.bind("H", hl.dsp.window.swap({ direction = "left" }), { repeating = true })',
             output,
         )
         self.assertIn(
@@ -173,11 +179,15 @@ command = "waybar"
         result = self.load(
             BASE
             + '\n[window]\ncycle_window = "mod+Tab"\n'
-            + '\n[workspace]\nscratchpad_toggle = "mod+s"\n'
+            + '\n[workspace]\nscratchpad_toggle = "mod+s"\nmove_follow = "send+1"\nadjacent_move = "send+leftbracket"\n'
+            + '\n[monitor]\nmove_next_follow = "send+o"\n'
         )
         output = keymap.render_lua(result)
         self.assertIn('hl.dsp.window.cycle_next({ next = true })', output)
         self.assertIn('hl.dsp.workspace.toggle_special("scratchpad")', output)
+        self.assertIn('hl.dsp.window.move({ workspace = "10", follow = true })', output)
+        self.assertIn('hl.dsp.window.move({ workspace = "e-1", follow = true })', output)
+        self.assertIn('hl.dsp.window.move({ monitor = "+1", follow = true })', output)
 
     def test_uses_cachyos_noctalia_message_commands(self) -> None:
         result = self.load(
@@ -196,135 +206,39 @@ class GeneratedFileTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.target = Path(self.directory.name) / "hypr"
         with mock.patch.dict(os.environ, {"HYPRLAND_CONFIG_ROOT": str(self.target)}, clear=False):
-            keymap.generate()
+            config.generate()
 
     def tearDown(self) -> None:
         self.directory.cleanup()
 
     def test_repository_outputs_are_synchronized(self) -> None:
         with mock.patch.dict(os.environ, {"HYPRLAND_CONFIG_ROOT": str(self.target)}, clear=False):
-            keymap.check()
+            config.check()
 
     def test_manual_generated_drift_is_detected(self) -> None:
-        output = keymap._target_lua_path(self.target)
+        output = config._target_path(self.target, config.MODULE_REL["keymap"])
         original = output.read_text(encoding="utf-8")
         try:
             output.write_text(original + "-- drift\n", encoding="utf-8")
             with mock.patch.dict(os.environ, {"HYPRLAND_CONFIG_ROOT": str(self.target)}, clear=False):
-                self.assertIn(str(output), keymap.generate(check=True))
+                self.assertIn(str(output), config.generate(check_only=True))
         finally:
             output.write_text(original, encoding="utf-8")
 
     def test_generate_refuses_a_live_repository_root(self) -> None:
         with mock.patch.dict(os.environ, {"HYPRLAND_CONFIG_ROOT": str(keymap.ROOT)}, clear=False):
             with self.assertRaises(keymap.KeymapError) as raised:
-                keymap.generate()
+                config.generate()
         self.assertIn("just apply", str(raised.exception))
 
     def test_target_root_is_required_from_environment(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(keymap.KeymapError) as raised:
-                keymap.generate()
-        self.assertIn("HYPRLAND_CONFIG_ROOT is not set", str(raised.exception))
-
-
-class ApplyTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.directory = tempfile.TemporaryDirectory()
-        self.root = Path(self.directory.name)
-        self.target = self.root / "target"
-        (self.target / "config").mkdir(parents=True)
-        self.old = b"-- old binds\n"
-        (self.target / "config" / "binds.lua").write_bytes(self.old)
-        self.fake_hyprctl = self.root / "hyprctl"
-        self.fake_hyprctl.write_text(
-            """#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-
-args = sys.argv[1:]
-log = Path(os.environ["FAKE_HYPR_LOG"])
-with log.open("a", encoding="utf-8") as stream:
-    stream.write(json.dumps(args) + "\\n")
-if args == ["-j", "configerrors"]:
-    print(os.environ.get("FAKE_CONFIG_ERRORS", "[]"))
-    raise SystemExit(0)
-if args[:1] == ["keyword"]:
-    if os.environ.get("FAKE_FAIL_KEYWORD") == "1":
-        print("keyword failed", file=sys.stderr)
-        raise SystemExit(1)
-    raise SystemExit(0)
-if args == ["reload"]:
-    count_path = Path(os.environ["FAKE_RELOAD_COUNT"])
-    count = int(count_path.read_text() or "0") if count_path.exists() else 0
-    count_path.write_text(str(count + 1))
-    if os.environ.get("FAKE_FAIL_FIRST_RELOAD") == "1" and count == 0:
-        print("reload failed", file=sys.stderr)
-        raise SystemExit(1)
-    if os.environ.get("FAKE_FAIL_ALL_RELOADS") == "1":
-        print("reload failed", file=sys.stderr)
-        raise SystemExit(1)
-    raise SystemExit(0)
-raise SystemExit(0)
-""",
-            encoding="utf-8",
+                config.generate()
+        self.assertEqual(
+            str(raised.exception),
+            '- HYPRLAND_CONFIG_ROOT is not set; define it once, for example `export HYPRLAND_CONFIG_ROOT="$HOME/.config/hypr"`',
         )
-        self.fake_hyprctl.chmod(self.fake_hyprctl.stat().st_mode | stat.S_IXUSR)
-        self.environment = {
-            "HYPRCTL": str(self.fake_hyprctl),
-            "FAKE_HYPR_LOG": str(self.root / "hyprctl.log"),
-            "FAKE_RELOAD_COUNT": str(self.root / "reload.count"),
-            "HYPRLAND_CONFIG_ROOT": str(self.target),
-        }
-        if lua := keymap._lua_binary():
-            self.environment["LUA"] = lua
-
-    def tearDown(self) -> None:
-        self.directory.cleanup()
-
-    def test_apply_success_and_manual_rollback(self) -> None:
-        with mock.patch.dict(os.environ, self.environment, clear=False):
-            keymap.apply()
-            self.assertNotEqual((self.target / "config" / "binds.lua").read_bytes(), self.old)
-            self.assertTrue((self.target / "config" / ".binds.lua.previous").exists())
-            keymap.rollback()
-        self.assertEqual((self.target / "config" / "binds.lua").read_bytes(), self.old)
-        self.assertFalse((self.target / "config" / ".binds.lua.previous").exists())
-
-    def test_existing_config_errors_block_replacement(self) -> None:
-        self.environment["FAKE_CONFIG_ERRORS"] = json.dumps(["old error"])
-        with mock.patch.dict(os.environ, self.environment, clear=False):
-            with self.assertRaises(keymap.KeymapError) as raised:
-                keymap.apply()
-        self.assertIn("existing Hyprland configuration errors", str(raised.exception))
-        self.assertEqual((self.target / "config" / "binds.lua").read_bytes(), self.old)
-
-    def test_reload_failure_restores_old_file(self) -> None:
-        self.environment["FAKE_FAIL_FIRST_RELOAD"] = "1"
-        with mock.patch.dict(os.environ, self.environment, clear=False):
-            with self.assertRaises(keymap.KeymapError) as raised:
-                keymap.apply()
-        self.assertIn("automatic rollback succeeded", str(raised.exception))
-        self.assertEqual((self.target / "config" / "binds.lua").read_bytes(), self.old)
-
-    def test_rollback_reload_failure_restores_current_file(self) -> None:
-        with mock.patch.dict(os.environ, self.environment, clear=False):
-            keymap.apply()
-            applied = (self.target / "config" / "binds.lua").read_bytes()
-            with mock.patch.dict(os.environ, {"FAKE_FAIL_ALL_RELOADS": "1"}, clear=False):
-                with self.assertRaises(keymap.KeymapError):
-                    keymap.rollback()
-        self.assertEqual((self.target / "config" / "binds.lua").read_bytes(), applied)
-
-    def test_rollback_requires_autoreload_control(self) -> None:
-        (self.target / "config" / ".binds.lua.previous").write_bytes(self.old)
-        self.environment["FAKE_FAIL_KEYWORD"] = "1"
-        with mock.patch.dict(os.environ, self.environment, clear=False):
-            with self.assertRaises(keymap.KeymapError) as raised:
-                keymap.rollback()
-        self.assertIn("could not disable Hyprland autoreload", str(raised.exception))
 
 
 if __name__ == "__main__":

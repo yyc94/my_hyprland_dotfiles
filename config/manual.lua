@@ -1,0 +1,2 @@
+-- Hand-maintained Hyprland Lua escape hatch.
+-- Keep settings that are not covered by the TOML schemas here.

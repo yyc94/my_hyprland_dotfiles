@@ -1,0 +1,14 @@
+# Application commands migrated mechanically from the legacy variables.lua.
+# Edit these values to match the programs installed on the target workstation.
+
+[meta]
+schema = "1"
+target_hyprland = ">=0.55.0"
+profile = "CachyOS Hypr/Noctalia"
+
+[commands]
+browser = "zen-browser"
+calculator = "gnome-calculator"
+file_manager = "yazi"
+system_monitor = "btop"
+terminal = "kitty"

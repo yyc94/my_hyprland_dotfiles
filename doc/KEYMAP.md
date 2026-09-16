@@ -1,12 +1,12 @@
 <!-- GENERATED FILE. DO NOT EDIT. -->
 <!-- Source: config/keymap.toml -->
-<!-- Content-SHA256: 5d0a8b62d58b561791319399a7efe2a14b25546b3e4baa76aa55fe2439999643 -->
+<!-- Content-SHA256: 5254986ab90346cdbe763fafa8bbc5f4f1009fa739fd593bc3453e0fc81bcbec -->
 
 # Keymap
 
 This file is generated from [`config/keymap.toml`](../config/keymap.toml). The keymap targets Hyprland >= 0.55.0 with the CachyOS Hypr/Noctalia profile.
 
-The generated Lua is deployed to `$HYPRLAND_CONFIG_ROOT/config/binds.lua`. Set `HYPRLAND_CONFIG_ROOT` once in the workstation environment, then use the Justfile commands to generate, check, apply, or roll back the deployment.
+The generated Lua is deployed to `$HYPRLAND_CONFIG_ROOT/config/generated/binds.lua`. Set `HYPRLAND_CONFIG_ROOT` once in the workstation environment, then use the Justfile commands to generate, check, apply, or roll back the deployment.
 
 ## Chord syntax
 

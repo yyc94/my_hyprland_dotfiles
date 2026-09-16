@@ -1,4 +1,5 @@
--- Application commands are kept here so the generated keymap stays declarative.
+-- DEPRECATED legacy source. Use config/variables.toml for active values.
+-- Kept only so just migrate-variables can produce a reviewed candidate.
 return {
 	terminal = "kitty",
 	file_manager = "yazi",

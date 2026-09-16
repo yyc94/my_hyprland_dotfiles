@@ -39,7 +39,7 @@ focus_next = "mod+o"
 move_next_follow = "send+o"
 
 [application]
-# Commands are resolved by config/variables.lua, not copied into generated Lua.
+# Commands are resolved by config/variables.toml, not copied into generated Lua.
 terminal = "mod+Enter"
 file_manager = "mod+e"
 browser = "mod+b"
