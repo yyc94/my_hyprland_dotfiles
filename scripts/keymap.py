@@ -321,6 +321,9 @@ def _validate_command(command: object, path: str, errors: list[str]) -> None:
     if not _validate_string(command, path, errors):
         return
     assert isinstance(command, str)
+    if "\x00" in command:
+        errors.append(f"{path}: NUL bytes are not allowed")
+        return
     if "$(" in command or "`" in command:
         errors.append(f"{path}: command substitution is not allowed")
         return
@@ -340,7 +343,12 @@ def _validate_command(command: object, path: str, errors: list[str]) -> None:
         shell.whitespace_split = True
         command_words = list(shell)
     else:
-        command_words = words
+        shell = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        shell.whitespace_split = True
+        command_words = list(shell)
+        if any(word in SHELL_WORDS for word in command_words):
+            errors.append(f"{path}: shell operators require sh -c '...' and are not allowed in direct commands")
+            return
     expects_executable = True
     for word in command_words:
         if word in SHELL_WORDS:
@@ -801,8 +809,25 @@ def render_doc(keymap: Keymap) -> str:
         "or `XF86AudioRaiseVolume`. `mod` expands to the configured `SUPER` modifier and "
         "`send` expands to `ALT`. Missing TOML fields mean that no binding is generated.",
         "",
+        "## TOML structure",
+        "",
+        "`[meta]` is required and must contain exactly `schema = \"1\"`, a non-empty `target_hyprland`, and a non-empty `profile`. "
+        "`[modifiers]` is required and must define distinct `mod` and `send` values. Each value is one of `SUPER`, `ALT`, or `CTRL`; "
+        "`SHIFT` cannot be used as a primary alias, but it is valid directly in a chord.",
+        "",
+        "All action sections are optional. An action value is either one chord string or a non-empty array of chord strings. "
+        "Unknown sections and action names are rejected. The `[adjust]` table is the one exception: it is required and must define "
+        "`enter`, `exit`, `reorder`, and `resize`.",
+        "",
+        "A chord has at most one modifier and one key. Modifier names are case-insensitive; supported modifiers are `mod`, `send`, `SUPER`, `ALT`, `CTRL`, `Control`, and `Shift`. "
+        "Supported keys are `A`-`Z`, `0`-`9`, `-`, `=`, `[`, `]`, `,`, `.`, `/`, `F1`-`F12`, the common special keys below, "
+        "`mouse:<number>`, and `code:<number>` with a positive number. `catchall` is reserved by Adjust mode.",
+        "",
         "Workspace digits use physical key codes so the number row remains stable across layouts: "
         "`1..9,0` compile to `code:10..19`.",
+        "",
+        "For `workspace.switch` and `workspace.move_follow` only, the compiled workspace value is the digit itself (`1`-`9` or `0`), "
+        "while the key is compiled to the physical code. Other workspace selectors are generated literally.",
         "",
         "## Supported actions",
         "",
@@ -884,9 +909,33 @@ def render_doc(keymap: Keymap) -> str:
             "",
             "## Adjust mode",
             "",
-            "`mod+a` enters the finite Adjust mode. `Esc` and `Enter` leave it. "
-            "`h/j/k/l` reorder windows; `Shift+h/j/k/l` resize by 40px. These bindings repeat. "
-            "Other keys are consumed and leave the mode active.",
+            "`adjust.enter` enters the finite Adjust mode. `adjust.exit` must include unmodified `Esc` and `Enter`; extra exit chords are allowed. "
+            "`adjust.reorder` must contain exactly unmodified `h/j/k/l`; `adjust.resize` must contain exactly `Shift+h/j/k/l`. "
+            "The reorder and resize bindings repeat.",
+            "",
+            "The generated mode mapping is fixed: hardware actions are `universal`; Noctalia `lock` and `session_menu` are `universal`; "
+            "Adjust actions other than `enter` are in `adjust`; all other actions are in `normal`. `submap_universal` keeps a binding "
+            "active in Adjust; hardware bindings additionally use `locked = true` and remain available while the session is locked. "
+            "Duplicate chords are rejected, and a universal chord cannot also be local.",
+            "",
+            "Unknown keys in Adjust mode are consumed by a generated `catchall` binding and leave the mode active.",
+            "",
+            "## extra.exec",
+            "",
+            "Each named command uses this shape:",
+            "",
+            "```toml",
+            "[extra.exec.reload_bar]",
+            "chord = \"mod+r\"",
+            "command = \"waybar\"",
+            "mode = \"normal\"",
+            "```",
+            "",
+            "The name must match `[A-Za-z_][A-Za-z0-9_-]*`; `chord` and `command` are required; `mode` is optional and is `normal` by default, "
+            "or may be `universal`. Direct commands must be a single allowlisted process invocation; shell operators require `sh -c '...'`, whose processes must all be allowlisted. "
+            "Command substitution, raw Lua, `hyprctl`, and arbitrary Hyprland dispatch/control commands are rejected. The current process "
+            "allowlist is `brightnessctl`, `grim`, `hypridle`, `hyprlock`, `hyprpaper`, `hyprpicker`, `noctalia`, `noctalia-shell`, "
+            "`notify-send`, `pamixer`, `playerctl`, `slurp`, `systemctl`, `true`, `waybar`, and `wl-copy`.",
             "",
             "## Common special keys",
             "",

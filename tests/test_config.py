@@ -133,6 +133,54 @@ blur = true
                     config._build()
         self.assertIn("missing variables.commands", str(raised.exception))
 
+    def test_config_doc_lists_every_registered_field(self) -> None:
+        with tempfile.TemporaryDirectory(dir=config.ROOT) as directory:
+            paths = self.make_sources(Path(directory))
+            with mock.patch.object(config, "SOURCE_FILES", paths):
+                documentation = config._build().config_doc
+
+        for domain in ("variables.toml", "monitors.toml", "workspaces.toml", "input.toml", "rules.toml", "environment.toml", "autostart.toml"):
+            self.assertIn(f"## {domain}", documentation)
+        for field in ("output", "mode", "position", "scale", "disabled", "transform", "vrr"):
+            self.assertIn(f"`{field}`", documentation)
+        for field in ("workspace", "monitor", "default", "persistent", "layout"):
+            self.assertIn(f"`{field}`", documentation)
+        for field in ("layout", "variant", "model", "options", "rules", "repeat_rate", "repeat_delay", "numlock_by_default", "resolve_binds_by_sym"):
+            self.assertIn(f"`{field}`", documentation)
+        for field in (
+            "follow",
+            "follow_threshold",
+            "focus_on_close",
+            "mouse_refocus",
+            "float_switch_override_focus",
+            "sensitivity",
+            "accel_profile",
+            "force_no_accel",
+            "rotation",
+            "left_handed",
+            "scroll_method",
+            "scroll_button",
+            "scroll_button_lock",
+            "scroll_points",
+            "scroll_factor",
+            "natural_scroll",
+            "special_fallthrough",
+            "off_window_axis_events",
+            "emulate_discrete_scroll",
+            "follow_mouse_shrink",
+        ):
+            self.assertIn(f"`{field}`", documentation)
+        for field in config.WINDOW_MATCH_FIELDS | config.MATCH_BOOL_FIELDS | config.MATCH_INT_FIELDS | config.LAYER_MATCH_FIELDS:
+            self.assertIn(f"`{field}`", documentation)
+        for field in config.WINDOW_EFFECT_FIELDS | config.LAYER_EFFECT_FIELDS:
+            self.assertIn(f"`{field}`", documentation)
+        for field in ("name", "enabled", "match", "effects"):
+            self.assertIn(f"| `{field}` |", documentation)
+        for field in config.ALLOWED_EXECUTABLES:
+            self.assertIn(f"`{field}`", documentation)
+        self.assertIn("Shell operators, command substitution, and backtick substitution are rejected", documentation)
+        self.assertIn("position string such as `\"0x0\"`", documentation)
+
 
 class DeploymentTests(unittest.TestCase):
     def setUp(self) -> None:

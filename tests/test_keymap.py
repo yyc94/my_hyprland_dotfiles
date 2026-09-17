@@ -90,6 +90,8 @@ command = "waybar"
         self.assertInvalid(invalid, "raw Hyprland dispatch/control commands are not allowed")
         unknown = valid.replace('command = "waybar"', 'command = "sh -c \'waybar && unknown-command\'"')
         self.assertInvalid(unknown, "executable is not in the controlled process allowlist")
+        direct_shell = valid.replace('command = "waybar"', 'command = "waybar; true"')
+        self.assertInvalid(direct_shell, "shell operators require sh -c")
 
     def test_rendering_is_deterministic_and_contains_header(self) -> None:
         result = self.load(BASE + '\n[window]\nclose = "mod+q"\n')
@@ -97,6 +99,24 @@ command = "waybar"
         self.assertEqual(keymap.render_doc(result), keymap.render_doc(result))
         self.assertIn("GENERATED FILE. DO NOT EDIT.", keymap.render_lua(result))
         self.assertIn(result.source_hash, keymap.render_doc(result))
+
+    def test_keymap_doc_lists_the_complete_interface(self) -> None:
+        documentation = keymap.render_doc(self.load(BASE))
+        self.assertIn("[meta]", documentation)
+        self.assertIn("[modifiers]", documentation)
+        self.assertIn("`adjust.enter`", documentation)
+        self.assertIn("`adjust.exit`", documentation)
+        self.assertIn("`adjust.reorder`", documentation)
+        self.assertIn("`adjust.resize`", documentation)
+        for section, actions in keymap.SECTION_ACTIONS.items():
+            for action in actions:
+                self.assertIn(f"| `{section}` | `{action}` |", documentation)
+        self.assertIn("| `extra.exec` | `named command` |", documentation)
+        self.assertIn("[extra.exec.reload_bar]", documentation)
+        self.assertIn("`mouse:<number>`", documentation)
+        self.assertIn("`code:<number>`", documentation)
+        self.assertIn("`XF86AudioRaiseVolume`", documentation)
+        self.assertIn("`F1`-`F12`", documentation)
 
     def test_error_accepts_one_message_without_splitting_it(self) -> None:
         self.assertEqual(str(keymap.KeymapError("one error")), "- one error")
