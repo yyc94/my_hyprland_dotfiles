@@ -1560,7 +1560,19 @@ def generate(*, check_only: bool = False) -> list[str]:
 
 
 def _lua_binary() -> str | None:
-    return os.environ.get("LUA") or shutil.which("lua5.5")
+    candidate = os.environ.get("LUA") or shutil.which("lua5.5")
+    if candidate is None:
+        return None
+    try:
+        result = subprocess.run([candidate, "-v"], capture_output=True, text=True)
+    except OSError as exc:
+        raise ConfigError((f"Lua syntax checker could not be executed: {exc}",)) from exc
+    reported = f"{result.stdout}\n{result.stderr}"
+    version = re.search(r"\bLua (\d+\.\d+)", reported)
+    if result.returncode != 0 or version is None or version.group(1) != "5.5":
+        detail = reported.strip() or f"exit status {result.returncode}"
+        raise ConfigError((f"Lua 5.5 is required for syntax checks; {candidate!r} reported {detail}",))
+    return candidate
 
 
 def _lua_syntax_check(path: Path) -> None:

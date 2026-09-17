@@ -163,6 +163,12 @@ command = "waybar"
                 self.assertIsNone(config._lua_binary())
                 which.assert_called_once_with("lua5.5")
 
+    def test_lua_binary_rejects_a_lua54_override(self) -> None:
+        with mock.patch.dict(os.environ, {"LUA": "/usr/bin/lua5.4"}, clear=False):
+            with self.assertRaises(config.ConfigError) as raised:
+                config._lua_binary()
+        self.assertIn("Lua 5.5 is required", str(raised.exception))
+
     def test_universal_bindings_are_emitted_for_normal_and_adjust(self) -> None:
         result = self.load(BASE + '\n[hardware]\nmute = "XF86AudioMute"\n')
         output = keymap.render_lua(result)
